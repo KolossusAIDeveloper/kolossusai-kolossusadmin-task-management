@@ -6,24 +6,37 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Django backend + serve React
+# Stage 2: Production image with nginx + gunicorn
 FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx supervisor && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install Python dependencies
+# Python dependencies
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy Django backend
+# Django backend
 COPY backend/ ./
 
-# Copy React build into Django staticfiles directory
-COPY --from=frontend-build /app/frontend/build/ ./staticfiles/
+# React build served by nginx
+COPY --from=frontend-build /app/frontend/build /var/www/react
 
-# Run migrations and start server
-RUN python manage.py migrate --noinput
-RUN python manage.py collectstatic --noinput 2>/dev/null || true
+# nginx config
+COPY nginx.conf /etc/nginx/sites-available/default
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
-EXPOSE 8000
+# supervisor config
+COPY supervisord.conf /etc/supervisord.conf
 
-CMD ["gunicorn", "taskmanager.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
+# Django setup
+RUN python manage.py migrate --noinput && \
+    python manage.py collectstatic --noinput
+
+EXPOSE 80
+
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisord.conf"]
